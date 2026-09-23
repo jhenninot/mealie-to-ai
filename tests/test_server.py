@@ -64,7 +64,7 @@ async def test_create_recipe_reuses_and_creates_tags(fake, mealie):
     assert result.structured_content["ingredients"] == ["3 pommes"]
     patch = next(b for m, p, b in fake.requests if m == "PATCH")
     assert [t["id"] for t in patch["tags"]] == ["t1", "t2"]
-    assert patch["recipeInstructions"] == [{"text": "Cuire"}]
+    assert patch["recipeInstructions"] == [{"text": "Cuire", "ingredientReferences": []}]
 
 
 async def test_shopping_list_defaults_to_single_list(fake, mealie):

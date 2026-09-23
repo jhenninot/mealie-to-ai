@@ -184,7 +184,9 @@ def build_server(mealie: MealieClient) -> MCPServer:
         if ingredients is not None:
             patch["recipeIngredient"] = [{"note": i} for i in ingredients]
         if instructions is not None:
-            patch["recipeInstructions"] = [{"text": s} for s in instructions]
+            # ingredientReferences explicite : sans lui, Mealie < 3.20 plante en HTTP 500
+            # (TypeError sur RecipeInstruction.__init__), cf. mealie-recipes/mealie#7732.
+            patch["recipeInstructions"] = [{"text": s, "ingredientReferences": []} for s in instructions]
         if tags is not None:
             patch["tags"] = await resolve_organizers("tags", tags)
         if categories is not None:
