@@ -19,6 +19,7 @@ class FakeMealie:
     def __init__(self):
         self.tags = [{"id": "t1", "name": "Dessert", "slug": "dessert"}]
         self.lists = [{"id": "l1", "name": "Courses"}]
+        self.recipes: dict[str, dict] = {}
         self.requests: list[tuple[str, str, object]] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -34,6 +35,8 @@ class FakeMealie:
                 return httpx.Response(201, json=tag)
             case "POST", "/recipes":
                 return httpx.Response(201, json="tarte")
+            case "GET", path if path.removeprefix("/recipes/") in self.recipes:
+                return httpx.Response(200, json=self.recipes[path.removeprefix("/recipes/")])
             case "PATCH", "/recipes/tarte":
                 return httpx.Response(200, json={"slug": "tarte", "name": "Tarte", **body})
             case "GET", "/households/shopping/lists":
@@ -65,6 +68,30 @@ async def test_create_recipe_reuses_and_creates_tags(fake, mealie):
     patch = next(b for m, p, b in fake.requests if m == "PATCH")
     assert [t["id"] for t in patch["tags"]] == ["t1", "t2"]
     assert patch["recipeInstructions"] == [{"text": "Cuire", "ingredientReferences": []}]
+
+
+async def test_step_titles_survive_a_read_write_round_trip(fake, mealie):
+    fake.recipes["tarte"] = {
+        "slug": "tarte",
+        "name": "Tarte",
+        "recipeInstructions": [
+            {"id": "s1", "title": "Pour la pâte", "text": "Mélanger la farine"},
+            {"id": "s2", "title": "", "text": "Étaler"},
+        ],
+    }
+    async with Client(build_server(mealie)) as client:
+        read = await client.call_tool("get_recipe", {"slug": "tarte"})
+        steps = read.structured_content["instructions"]
+        # Les étapes relues sont réémises telles quelles, avec une étape ajoutée.
+        await client.call_tool("update_recipe", {"slug": "tarte", "instructions": [*steps, "Enfourner"]})
+
+    assert steps == [{"title": "Pour la pâte", "text": "Mélanger la farine"}, {"text": "Étaler"}]
+    patch = next(b for m, p, b in fake.requests if m == "PATCH")
+    assert patch["recipeInstructions"] == [
+        {"text": "Mélanger la farine", "ingredientReferences": [], "title": "Pour la pâte"},
+        {"text": "Étaler", "ingredientReferences": []},
+        {"text": "Enfourner", "ingredientReferences": []},
+    ]
 
 
 async def test_shopping_list_defaults_to_single_list(fake, mealie):

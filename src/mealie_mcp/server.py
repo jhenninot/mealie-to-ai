@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, Literal
+from typing import Any, Literal, NotRequired, TypedDict
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -13,6 +13,13 @@ from . import __version__
 from .mealie import MealieClient, MealieError, OrganizerKind
 
 MealType = Literal["breakfast", "lunch", "dinner", "side", "snack", "drink", "dessert"]
+
+
+class Step(TypedDict):
+    """Étape de recette. `title` est un titre de section, pas un titre d'étape."""
+
+    text: str
+    title: NotRequired[str]
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
@@ -34,6 +41,26 @@ Avant de supprimer quoi que ce soit, confirmer avec l'utilisateur.
 
 def _names(items: list[dict[str, Any]] | None) -> list[str]:
     return [i["name"] for i in items or []]
+
+
+def _step(s: dict[str, Any]) -> Step:
+    """Étape Mealie -> forme acceptée en écriture, pour un aller-retour sans perte."""
+    step: Step = {"text": s.get("text") or ""}
+    if s.get("title"):
+        step["title"] = s["title"]
+    return step
+
+
+def _instruction_payload(step: str | Step) -> dict[str, Any]:
+    """Étape fournie par l'appelant -> objet attendu par l'API Mealie."""
+    if isinstance(step, str):
+        step = {"text": step}
+    # ingredientReferences explicite : sans lui, Mealie < 3.20 plante en HTTP 500
+    # (TypeError sur RecipeInstruction.__init__), cf. mealie-recipes/mealie#7732.
+    payload: dict[str, Any] = {"text": step.get("text") or "", "ingredientReferences": []}
+    if step.get("title"):
+        payload["title"] = step["title"]
+    return payload
 
 
 def _recipe_summary(r: dict[str, Any]) -> dict[str, Any]:
@@ -63,10 +90,7 @@ def _recipe_detail(r: dict[str, Any]) -> dict[str, Any]:
             i.get("display") or i.get("note") or i.get("originalText") or ""
             for i in r.get("recipeIngredient") or []
         ],
-        "instructions": [
-            (f"{s['title']}: " if s.get("title") else "") + (s.get("text") or "")
-            for s in r.get("recipeInstructions") or []
-        ],
+        "instructions": [_step(s) for s in r.get("recipeInstructions") or []],
         "tags": _names(r.get("tags")),
         "categories": _names(r.get("recipeCategory")),
         "tools": _names(r.get("tools")),
@@ -159,7 +183,7 @@ def build_server(mealie: MealieClient) -> MCPServer:
         name: str | None = None,
         description: str | None = None,
         ingredients: list[str] | None = None,
-        instructions: list[str] | None = None,
+        instructions: list[str | Step] | None = None,
         recipe_yield: str | None = None,
         prep_time: str | None = None,
         cook_time: str | None = None,
@@ -184,9 +208,7 @@ def build_server(mealie: MealieClient) -> MCPServer:
         if ingredients is not None:
             patch["recipeIngredient"] = [{"note": i} for i in ingredients]
         if instructions is not None:
-            # ingredientReferences explicite : sans lui, Mealie < 3.20 plante en HTTP 500
-            # (TypeError sur RecipeInstruction.__init__), cf. mealie-recipes/mealie#7732.
-            patch["recipeInstructions"] = [{"text": s, "ingredientReferences": []} for s in instructions]
+            patch["recipeInstructions"] = [_instruction_payload(s) for s in instructions]
         if tags is not None:
             patch["tags"] = await resolve_organizers("tags", tags)
         if categories is not None:
@@ -232,7 +254,7 @@ def build_server(mealie: MealieClient) -> MCPServer:
     async def create_recipe(
         name: str,
         ingredients: list[str],
-        instructions: list[str],
+        instructions: list[str | Step],
         description: str | None = None,
         recipe_yield: str | None = None,
         prep_time: str | None = None,
@@ -246,7 +268,8 @@ def build_server(mealie: MealieClient) -> MCPServer:
         """Crée une recette dans Mealie.
 
         - ingredients : une ligne par ingrédient, quantité incluse (ex. "250 g de farine").
-        - instructions : une entrée par étape.
+        - instructions : une entrée par étape, soit le texte de l'étape, soit
+          {"text": ..., "title": ...} où title ouvre une section (ex. "Pour la garniture").
         - recipe_yield : ex. "4 personnes". Les temps sont du texte libre (ex. "20 minutes").
         - tags / categories / tools : noms ; ceux qui n'existent pas sont créés.
         """
@@ -272,7 +295,7 @@ def build_server(mealie: MealieClient) -> MCPServer:
         name: str | None = None,
         description: str | None = None,
         ingredients: list[str] | None = None,
-        instructions: list[str] | None = None,
+        instructions: list[str | Step] | None = None,
         recipe_yield: str | None = None,
         prep_time: str | None = None,
         cook_time: str | None = None,
@@ -286,6 +309,8 @@ def build_server(mealie: MealieClient) -> MCPServer:
 
         Attention : ingredients, instructions, tags, categories et tools REMPLACENT la liste
         existante — relire la recette avec get_recipe et renvoyer la liste complète.
+        get_recipe renvoie les étapes sous la forme attendue ici : les réémettre telles quelles
+        conserve les titres de section, les omettre les efface.
         """
         patch = await build_recipe_patch(
             name=name,
