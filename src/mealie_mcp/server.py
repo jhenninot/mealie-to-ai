@@ -16,9 +16,16 @@ MealType = Literal["breakfast", "lunch", "dinner", "side", "snack", "drink", "de
 
 
 class Step(TypedDict):
-    """Étape de recette. `title` est un titre de section, pas un titre d'étape."""
+    """Étape de recette.
+
+    - `summary` : le nom de l'étape (ex. « Blanchir la viande »), affiché en tête de l'étape
+      à la place de « Étape N ». C'est le champ à utiliser pour nommer une étape.
+    - `title` : un titre de *section*, affiché comme un bandeau qui regroupe cette étape et
+      les suivantes (ex. « Pour la garniture »). À n'utiliser que pour découper la recette.
+    """
 
     text: str
+    summary: NotRequired[str]
     title: NotRequired[str]
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -46,8 +53,9 @@ def _names(items: list[dict[str, Any]] | None) -> list[str]:
 def _step(s: dict[str, Any]) -> Step:
     """Étape Mealie -> forme acceptée en écriture, pour un aller-retour sans perte."""
     step: Step = {"text": s.get("text") or ""}
-    if s.get("title"):
-        step["title"] = s["title"]
+    for field in ("summary", "title"):
+        if s.get(field):
+            step[field] = s[field]
     return step
 
 
@@ -58,8 +66,9 @@ def _instruction_payload(step: str | Step) -> dict[str, Any]:
     # ingredientReferences explicite : sans lui, Mealie < 3.20 plante en HTTP 500
     # (TypeError sur RecipeInstruction.__init__), cf. mealie-recipes/mealie#7732.
     payload: dict[str, Any] = {"text": step.get("text") or "", "ingredientReferences": []}
-    if step.get("title"):
-        payload["title"] = step["title"]
+    for field in ("summary", "title"):
+        if step.get(field):
+            payload[field] = step[field]
     return payload
 
 
@@ -269,7 +278,8 @@ def build_server(mealie: MealieClient) -> MCPServer:
 
         - ingredients : une ligne par ingrédient, quantité incluse (ex. "250 g de farine").
         - instructions : une entrée par étape, soit le texte de l'étape, soit
-          {"text": ..., "title": ...} où title ouvre une section (ex. "Pour la garniture").
+          {"text": ..., "summary": ...} où summary nomme l'étape (ex. "Blanchir la viande").
+          Ajouter "title" uniquement pour ouvrir une nouvelle section (ex. "Pour la garniture").
         - recipe_yield : ex. "4 personnes". Les temps sont du texte libre (ex. "20 minutes").
         - tags / categories / tools : noms ; ceux qui n'existent pas sont créés.
         """
@@ -310,7 +320,7 @@ def build_server(mealie: MealieClient) -> MCPServer:
         Attention : ingredients, instructions, tags, categories et tools REMPLACENT la liste
         existante — relire la recette avec get_recipe et renvoyer la liste complète.
         get_recipe renvoie les étapes sous la forme attendue ici : les réémettre telles quelles
-        conserve les titres de section, les omettre les efface.
+        conserve leur nom (summary) et leur section (title), les omettre les efface.
         """
         patch = await build_recipe_patch(
             name=name,

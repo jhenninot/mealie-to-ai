@@ -70,27 +70,33 @@ async def test_create_recipe_reuses_and_creates_tags(fake, mealie):
     assert patch["recipeInstructions"] == [{"text": "Cuire", "ingredientReferences": []}]
 
 
-async def test_step_titles_survive_a_read_write_round_trip(fake, mealie):
+async def test_step_names_and_sections_survive_a_read_write_round_trip(fake, mealie):
     fake.recipes["tarte"] = {
         "slug": "tarte",
         "name": "Tarte",
         "recipeInstructions": [
-            {"id": "s1", "title": "Pour la pâte", "text": "Mélanger la farine"},
-            {"id": "s2", "title": "", "text": "Étaler"},
+            {"id": "s1", "title": "Pour la pâte", "summary": "Pétrir", "text": "Mélanger la farine"},
+            {"id": "s2", "title": "", "summary": "", "text": "Étaler"},
         ],
     }
     async with Client(build_server(mealie)) as client:
         read = await client.call_tool("get_recipe", {"slug": "tarte"})
         steps = read.structured_content["instructions"]
-        # Les étapes relues sont réémises telles quelles, avec une étape ajoutée.
-        await client.call_tool("update_recipe", {"slug": "tarte", "instructions": [*steps, "Enfourner"]})
+        # Les étapes relues sont réémises telles quelles, avec une étape nommée ajoutée.
+        await client.call_tool(
+            "update_recipe",
+            {"slug": "tarte", "instructions": [*steps, {"summary": "Cuisson", "text": "Enfourner"}]},
+        )
 
-    assert steps == [{"title": "Pour la pâte", "text": "Mélanger la farine"}, {"text": "Étaler"}]
+    assert steps == [
+        {"text": "Mélanger la farine", "summary": "Pétrir", "title": "Pour la pâte"},
+        {"text": "Étaler"},
+    ]
     patch = next(b for m, p, b in fake.requests if m == "PATCH")
     assert patch["recipeInstructions"] == [
-        {"text": "Mélanger la farine", "ingredientReferences": [], "title": "Pour la pâte"},
+        {"text": "Mélanger la farine", "ingredientReferences": [], "summary": "Pétrir", "title": "Pour la pâte"},
         {"text": "Étaler", "ingredientReferences": []},
-        {"text": "Enfourner", "ingredientReferences": []},
+        {"text": "Enfourner", "ingredientReferences": [], "summary": "Cuisson"},
     ]
 
 
