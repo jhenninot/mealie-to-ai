@@ -52,6 +52,9 @@ curl http://localhost:8000/health   # {"status":"ok"}
 Pour passer au dernier build : `docker compose pull && docker compose up -d`
 (ou automatiquement avec [Watchtower](https://containrrr.dev/watchtower/)).
 
+> Déploiement via **Dockge** et **Nginx Proxy Manager**, pas à pas :
+> voir [INSTALL-DOCKGE.md](INSTALL-DOCKGE.md).
+
 ### 4. Exposition en HTTPS
 claude.ai se connecte au serveur depuis Internet : il faut l'exposer en HTTPS (reverse proxy
 Caddy/Traefik/Nginx, Cloudflare Tunnel, Tailscale Funnel…). Seul le chemin `/mcp/…` a besoin d'être
