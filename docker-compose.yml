@@ -1,0 +1,15 @@
+# Exemple : à ajouter à côté de votre service Mealie existant.
+# L'image est construite par GitHub Actions à chaque commit sur main.
+# Mise à jour : docker compose pull && docker compose up -d
+#
+# Le connecteur doit être exposé en HTTPS sur Internet (reverse proxy, Cloudflare Tunnel, etc.)
+# pour que claude.ai puisse le joindre.
+services:
+  mealie-mcp:
+    image: ghcr.io/jhenninot/mealie-to-ai:latest
+    pull_policy: always
+    container_name: mealie-mcp
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8000:8000"
