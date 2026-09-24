@@ -10,7 +10,7 @@ Testé avec Mealie v3.27.
 
 | Domaine | Outils |
 |---|---|
-| Recettes | `search_recipes`, `get_recipe`, `create_recipe`, `update_recipe`, `import_recipe_from_url`, `delete_recipe` |
+| Recettes | `search_recipes`, `get_recipe`, `create_recipe`, `update_recipe`, `update_ingredients`, `import_recipe_from_url`, `delete_recipe` |
 | Planning des repas | `get_meal_plan`, `add_meal_plan_entry`, `delete_meal_plan_entry` |
 | Listes de courses | `list_shopping_lists`, `get_shopping_list`, `add_shopping_items`, `set_shopping_item_checked`, `delete_shopping_item`, `add_recipe_to_shopping_list` |
 | Organisation | `list_organizers`, `create_organizer` (tags, catégories, ustensiles) |

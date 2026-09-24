@@ -8,6 +8,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
+from pydantic import BaseModel, Field
 
 from . import __version__
 from .mealie import MealieClient, MealieError, OrganizerKind
@@ -39,8 +40,47 @@ Accès à l'instance Mealie du foyer (gestionnaire de recettes).
   (breakfast, lunch, dinner, side, snack, drink, dessert).
 - Les listes de courses peuvent être désignées par leur nom ou leur id ; si le foyer
   n'a qu'une seule liste, elle est utilisée par défaut.
+- Les ingrédients sont structurés (quantité, unité, aliment, note) et identifiés par leur
+  `reference_id` : pour changer des quantités, utiliser update_ingredients.
 Avant de supprimer quoi que ce soit, confirmer avec l'utilisateur.
 """
+
+
+# --- Ingrédients structurés --------------------------------------------------------
+
+
+class IngredientInput(BaseModel):
+    """Ingrédient découpé comme dans Mealie."""
+
+    quantity: float | None = Field(None, description="Quantité numérique (ex. 400, 0.5). Vide si sans quantité.")
+    unit: str | None = Field(None, description="Unité (ex. \"g\", \"cuillère à soupe\"). Créée si inconnue.")
+    food: str | None = Field(None, description="Aliment (ex. \"tomme fraîche\"). Créé si inconnu.")
+    note: str | None = Field(None, description="Précision libre (ex. \"en fines lamelles\").")
+    title: str | None = Field(None, description="Titre de section commençant à cet ingrédient (ex. \"Pour la sauce\").")
+    reference_id: str | None = Field(None, description="À recopier depuis get_recipe pour garder les liens avec les étapes.")
+
+
+class IngredientChange(BaseModel):
+    """Modification d'un ingrédient existant : seuls les champs fournis changent."""
+
+    reference_id: str = Field(description="reference_id de l'ingrédient, obtenu via get_recipe.")
+    quantity: float | None = Field(None, description="Nouvelle quantité (null pour la retirer).")
+    unit: str | None = Field(None, description="Nouvelle unité (null ou \"\" pour la retirer).")
+    food: str | None = Field(None, description="Nouvel aliment (null ou \"\" pour le retirer).")
+    note: str | None = Field(None, description="Nouvelle note (null ou \"\" pour l'effacer).")
+    title: str | None = Field(None, description="Nouveau titre de section (null ou \"\" pour le retirer).")
+
+
+def _unit_keys(u: dict[str, Any]) -> list[str]:
+    return [u.get(k) for k in ("name", "pluralName", "abbreviation", "pluralAbbreviation") if u.get(k)]
+
+
+def _food_keys(f: dict[str, Any]) -> list[str]:
+    return [f.get(k) for k in ("name", "pluralName") if f.get(k)] + [a["name"] for a in f.get("aliases") or [] if a.get("name")]
+
+
+def _key(name: str | None) -> str:
+    return (name or "").strip().casefold()
 
 
 # --- Mise en forme compacte des objets Mealie -------------------------------------
@@ -84,6 +124,21 @@ def _recipe_summary(r: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ingredient(i: dict[str, Any]) -> dict[str, Any]:
+    unit, food = i.get("unit"), i.get("food")
+    out = {
+        "reference_id": i.get("referenceId"),
+        "title": i.get("title"),
+        # Sans unité ni aliment, Mealie considère la ligne comme non analysée : la quantité n'a pas de sens.
+        "quantity": i.get("quantity") if unit or food else None,
+        "unit": (unit.get("name") or unit.get("abbreviation")) if unit else None,
+        "food": food.get("name") if food else None,
+        "note": i.get("note"),
+        "display": i.get("display") or i.get("originalText"),
+    }
+    return {k: v for k, v in out.items() if v not in (None, "")}
+
+
 def _recipe_detail(r: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": r.get("id"),
@@ -95,10 +150,7 @@ def _recipe_detail(r: dict[str, Any]) -> dict[str, Any]:
         "prep_time": r.get("prepTime"),
         "cook_time": r.get("performTime"),
         "total_time": r.get("totalTime"),
-        "ingredients": [
-            i.get("display") or i.get("note") or i.get("originalText") or ""
-            for i in r.get("recipeIngredient") or []
-        ],
+        "ingredients": [_ingredient(i) for i in r.get("recipeIngredient") or []],
         "instructions": [_step(s) for s in r.get("recipeInstructions") or []],
         "tags": _names(r.get("tags")),
         "categories": _names(r.get("recipeCategory")),
@@ -172,6 +224,45 @@ def build_server(mealie: MealieClient) -> MCPServer:
             result.append(found)
         return result
 
+    async def resolve_named(list_fn, create_fn, keys_fn, names: list[str | None]) -> dict[str, dict[str, Any]]:
+        """Associe chaque nom (casse ignorée) à un objet Mealie existant, ou crée celui qui manque."""
+        wanted = {n.strip() for n in names if n and n.strip()}
+        if not wanted:
+            return {}
+        index: dict[str, dict[str, Any]] = {}
+        for o in await call(list_fn()):
+            for k in keys_fn(o):
+                index.setdefault(_key(k), o)
+        for name in wanted:
+            if _key(name) not in index:
+                index[_key(name)] = await call(create_fn(name))
+        return {_key(n): index[_key(n)] for n in wanted}
+
+    async def resolve_units_foods(items: list[Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        units = await resolve_named(mealie.list_units, mealie.create_unit, _unit_keys, [i.unit for i in items])
+        foods = await resolve_named(mealie.list_foods, mealie.create_food, _food_keys, [i.food for i in items])
+        return units, foods
+
+    async def build_ingredients(ingredients: list[str | IngredientInput]) -> list[dict[str, Any]]:
+        units, foods = await resolve_units_foods([i for i in ingredients if isinstance(i, IngredientInput)])
+        result = []
+        for i in ingredients:
+            if isinstance(i, str):
+                result.append({"note": i})
+                continue
+            raw: dict[str, Any] = {
+                "quantity": i.quantity or 0,
+                "unit": units.get(_key(i.unit)),
+                "food": foods.get(_key(i.food)),
+                "note": i.note or "",
+            }
+            if i.title:
+                raw["title"] = i.title
+            if i.reference_id:
+                raw["referenceId"] = i.reference_id
+            result.append(raw)
+        return result
+
     async def resolve_list(list_ref: str | None) -> dict[str, Any]:
         lists = await call(mealie.list_shopping_lists())
         if not lists:
@@ -191,7 +282,7 @@ def build_server(mealie: MealieClient) -> MCPServer:
         *,
         name: str | None = None,
         description: str | None = None,
-        ingredients: list[str] | None = None,
+        ingredients: list[str | IngredientInput] | None = None,
         instructions: list[str | Step] | None = None,
         recipe_yield: str | None = None,
         prep_time: str | None = None,
@@ -215,7 +306,7 @@ def build_server(mealie: MealieClient) -> MCPServer:
             if value is not None:
                 patch[key] = value
         if ingredients is not None:
-            patch["recipeIngredient"] = [{"note": i} for i in ingredients]
+            patch["recipeIngredient"] = await build_ingredients(ingredients)
         if instructions is not None:
             patch["recipeInstructions"] = [_instruction_payload(s) for s in instructions]
         if tags is not None:
@@ -262,7 +353,7 @@ def build_server(mealie: MealieClient) -> MCPServer:
     @mcp.tool(annotations=WRITE)
     async def create_recipe(
         name: str,
-        ingredients: list[str],
+        ingredients: list[str | IngredientInput],
         instructions: list[str | Step],
         description: str | None = None,
         recipe_yield: str | None = None,
@@ -276,7 +367,9 @@ def build_server(mealie: MealieClient) -> MCPServer:
     ) -> dict[str, Any]:
         """Crée une recette dans Mealie.
 
-        - ingredients : une ligne par ingrédient, quantité incluse (ex. "250 g de farine").
+        - ingredients : de préférence des objets structurés
+          ({"quantity": 250, "unit": "g", "food": "farine", "note": "tamisée"}) pour que Mealie
+          puisse ajuster les quantités ; une simple ligne de texte est aussi acceptée.
         - instructions : une entrée par étape, soit le texte de l'étape, soit
           {"text": ..., "summary": ...} où summary nomme l'étape (ex. "Blanchir la viande").
           Ajouter "title" uniquement pour ouvrir une nouvelle section (ex. "Pour la garniture").
@@ -304,7 +397,7 @@ def build_server(mealie: MealieClient) -> MCPServer:
         slug: str,
         name: str | None = None,
         description: str | None = None,
-        ingredients: list[str] | None = None,
+        ingredients: list[str | IngredientInput] | None = None,
         instructions: list[str | Step] | None = None,
         recipe_yield: str | None = None,
         prep_time: str | None = None,
@@ -319,6 +412,8 @@ def build_server(mealie: MealieClient) -> MCPServer:
 
         Attention : ingredients, instructions, tags, categories et tools REMPLACENT la liste
         existante — relire la recette avec get_recipe et renvoyer la liste complète.
+        Recopier le reference_id de chaque ingrédient ; pour ne changer que quelques ingrédients
+        (ex. une quantité), préférer update_ingredients.
         get_recipe renvoie les étapes sous la forme attendue ici : les réémettre telles quelles
         conserve leur nom (summary) et leur section (title), les omettre les efface.
         """
@@ -339,6 +434,38 @@ def build_server(mealie: MealieClient) -> MCPServer:
         if not patch:
             raise ToolError("Aucun champ à modifier.")
         return _recipe_detail(await call(mealie.patch_recipe(slug, patch)))
+
+    @mcp.tool(annotations=WRITE)
+    async def update_ingredients(slug: str, changes: list[IngredientChange]) -> dict[str, Any]:
+        """Modifie certains ingrédients d'une recette (quantité, unité, aliment, note, titre de section).
+
+        Chaque changement désigne un ingrédient par son reference_id (voir get_recipe) ; seuls les
+        champs fournis sont modifiés, les autres ingrédients restent intacts.
+        """
+        if not changes:
+            raise ToolError("Aucun changement fourni.")
+        recipe = await call(mealie.get_recipe(slug))
+        ingredients = recipe.get("recipeIngredient") or []
+        by_ref = {i.get("referenceId"): i for i in ingredients}
+        unknown = [c.reference_id for c in changes if c.reference_id not in by_ref]
+        if unknown:
+            raise ToolError(f"reference_id inconnu(s) : {', '.join(unknown)}. Relire la recette avec get_recipe.")
+        units, foods = await resolve_units_foods(changes)
+        for c in changes:
+            raw = by_ref[c.reference_id]
+            fields = c.model_fields_set
+            if "quantity" in fields:
+                raw["quantity"] = c.quantity or 0
+            if "unit" in fields:
+                raw["unit"] = units.get(_key(c.unit))
+            if "food" in fields:
+                raw["food"] = foods.get(_key(c.food))
+            if "note" in fields:
+                raw["note"] = c.note or ""
+            if "title" in fields:
+                raw["title"] = c.title or None
+            raw.pop("display", None)  # recalculé par Mealie
+        return _recipe_detail(await call(mealie.patch_recipe(slug, {"recipeIngredient": ingredients})))
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
     async def import_recipe_from_url(url: str, include_tags: bool = True) -> dict[str, Any]:

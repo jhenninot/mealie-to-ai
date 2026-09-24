@@ -94,6 +94,22 @@ class MealieClient:
     async def create_organizer(self, kind: OrganizerKind, name: str) -> dict[str, Any]:
         return await self._request("POST", f"/organizers/{kind}", json={"name": name})
 
+    # --- Unités et aliments (ingrédients structurés) -------------------------------
+
+    async def list_units(self) -> list[dict[str, Any]]:
+        data = await self._request("GET", "/units", params={"perPage": -1, "orderBy": "name", "orderDirection": "asc"})
+        return data["items"]
+
+    async def create_unit(self, name: str) -> dict[str, Any]:
+        return await self._request("POST", "/units", json={"name": name})
+
+    async def list_foods(self) -> list[dict[str, Any]]:
+        data = await self._request("GET", "/foods", params={"perPage": -1, "orderBy": "name", "orderDirection": "asc"})
+        return data["items"]
+
+    async def create_food(self, name: str) -> dict[str, Any]:
+        return await self._request("POST", "/foods", json={"name": name})
+
     # --- Planning des repas -------------------------------------------------------
 
     async def list_mealplans(self, start_date: str, end_date: str) -> list[dict[str, Any]]:
