@@ -134,6 +134,19 @@ async def test_step_names_and_sections_survive_a_read_write_round_trip(fake, mea
     ]
 
 
+async def test_servings_are_sent_as_number(fake, mealie):
+    async with Client(build_server(mealie)) as client:
+        created = await client.call_tool(
+            "create_recipe", {"name": "Tarte", "ingredients": ["3 pommes"], "instructions": ["Cuire"], "servings": 4}
+        )
+        updated = await client.call_tool("update_recipe", {"slug": "tarte", "servings": 6})
+    assert not created.is_error and not updated.is_error, (created.content, updated.content)
+    assert created.structured_content["servings"] == 4
+    patches = [b for m, p, b in fake.requests if m == "PATCH"]
+    assert patches[0]["recipeServings"] == 4 and "recipeYield" not in patches[0]
+    assert patches[1] == {"recipeServings": 6}
+
+
 async def test_get_recipe_exposes_structured_ingredients(mealie):
     async with Client(build_server(mealie)) as client:
         result = await client.call_tool("get_recipe", {"slug": "truffade"})

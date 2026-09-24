@@ -147,6 +147,7 @@ def _recipe_detail(r: dict[str, Any]) -> dict[str, Any]:
         "description": r.get("description") or None,
         "yield": r.get("recipeYield") or None,
         "servings": r.get("recipeServings") or None,
+        "yield_quantity": r.get("recipeYieldQuantity") or None,
         "prep_time": r.get("prepTime"),
         "cook_time": r.get("performTime"),
         "total_time": r.get("totalTime"),
@@ -284,6 +285,8 @@ def build_server(mealie: MealieClient) -> MCPServer:
         description: str | None = None,
         ingredients: list[str | IngredientInput] | None = None,
         instructions: list[str | Step] | None = None,
+        servings: float | None = None,
+        yield_quantity: float | None = None,
         recipe_yield: str | None = None,
         prep_time: str | None = None,
         cook_time: str | None = None,
@@ -297,6 +300,8 @@ def build_server(mealie: MealieClient) -> MCPServer:
         for key, value in {
             "name": name,
             "description": description,
+            "recipeServings": servings,
+            "recipeYieldQuantity": yield_quantity,
             "recipeYield": recipe_yield,
             "prepTime": prep_time,
             "performTime": cook_time,
@@ -356,6 +361,8 @@ def build_server(mealie: MealieClient) -> MCPServer:
         ingredients: list[str | IngredientInput],
         instructions: list[str | Step],
         description: str | None = None,
+        servings: float | None = None,
+        yield_quantity: float | None = None,
         recipe_yield: str | None = None,
         prep_time: str | None = None,
         cook_time: str | None = None,
@@ -373,13 +380,19 @@ def build_server(mealie: MealieClient) -> MCPServer:
         - instructions : une entrée par étape, soit le texte de l'étape, soit
           {"text": ..., "summary": ...} où summary nomme l'étape (ex. "Blanchir la viande").
           Ajouter "title" uniquement pour ouvrir une nouvelle section (ex. "Pour la garniture").
-        - recipe_yield : ex. "4 personnes". Les temps sont du texte libre (ex. "20 minutes").
+        - servings : nombre de portions (ex. 4). Toujours le renseigner : c'est lui qui permet
+          à Mealie d'ajuster les quantités des ingrédients.
+        - yield_quantity + recipe_yield : seulement pour un rendement qui n'est pas en portions
+          (ex. 12 et "biscuits") ; sinon les laisser vides.
+        - Les temps sont du texte libre (ex. "20 minutes").
         - tags / categories / tools : noms ; ceux qui n'existent pas sont créés.
         """
         patch = await build_recipe_patch(
             description=description,
             ingredients=ingredients,
             instructions=instructions,
+            servings=servings,
+            yield_quantity=yield_quantity,
             recipe_yield=recipe_yield,
             prep_time=prep_time,
             cook_time=cook_time,
@@ -399,6 +412,8 @@ def build_server(mealie: MealieClient) -> MCPServer:
         description: str | None = None,
         ingredients: list[str | IngredientInput] | None = None,
         instructions: list[str | Step] | None = None,
+        servings: float | None = None,
+        yield_quantity: float | None = None,
         recipe_yield: str | None = None,
         prep_time: str | None = None,
         cook_time: str | None = None,
@@ -414,6 +429,7 @@ def build_server(mealie: MealieClient) -> MCPServer:
         existante — relire la recette avec get_recipe et renvoyer la liste complète.
         Recopier le reference_id de chaque ingrédient ; pour ne changer que quelques ingrédients
         (ex. une quantité), préférer update_ingredients.
+        Le nombre de portions se règle avec servings (nombre), pas avec recipe_yield (texte).
         get_recipe renvoie les étapes sous la forme attendue ici : les réémettre telles quelles
         conserve leur nom (summary) et leur section (title), les omettre les efface.
         """
@@ -422,6 +438,8 @@ def build_server(mealie: MealieClient) -> MCPServer:
             description=description,
             ingredients=ingredients,
             instructions=instructions,
+            servings=servings,
+            yield_quantity=yield_quantity,
             recipe_yield=recipe_yield,
             prep_time=prep_time,
             cook_time=cook_time,
